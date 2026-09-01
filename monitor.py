@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import requests
 from selenium import webdriver
@@ -6,20 +7,52 @@ from selenium.webdriver.chrome.options import Options
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
-TARGET_URL = os.environ.get('TARGET_URL')
+URLS_CONFIG = os.environ.get('URLS_CONFIG', '')
 
-SECRET_NUMBER = "5"
+STATE_FILE = "state.json"
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_state(state):
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f, indent=2)
+    except Exception as e:
+        print(f"Error saving state: {e}")
 
 def send_telegram_message(text):
     if not TOKEN or not CHAT_ID:
-        print("⚠️ Telegram credentials not configured.")
         return
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": str(text)}
     try:
         requests.post(url, json=payload, timeout=5)
     except Exception as e:
-        print(f"Error sending Telegram message: {e}")
+        print(f"Error: {e}")
+
+def parse_config(raw_text):
+    mapping = {}
+    lines = raw_text.strip().splitlines()
+    for line in lines:
+        line = line.strip()
+        if not line or ',' not in line:
+            continue
+        parts = line.split(',', 1)
+        url = parts[0].strip()
+        identifier = parts[1].strip()
+        if url and identifier:
+            mapping[url] = identifier
+    return mapping
+
+urls_map = parse_config(URLS_CONFIG)
+state = load_state()
 
 chrome_options = Options()
 chrome_options.add_argument("--headless=new")
@@ -31,21 +64,25 @@ chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64
 driver = webdriver.Chrome(options=chrome_options)
 driver.set_page_load_timeout(15)
 
-if TARGET_URL:
+for url, secret_number in urls_map.items():
     try:
         cache_buster = int(time.time())
-        driver.get(f"{TARGET_URL}?v={cache_buster}")
-        
+        driver.get(f"{url}?v={cache_buster}")
         time.sleep(3)
-        page_source = driver.page_source
         
-        if "LIVE" in page_source:
-            send_telegram_message(SECRET_NUMBER)
-            print("🟢 Profile is LIVE!")
+        page_source = driver.page_source
+        is_live = "LIVE" in page_source
+        prev_live = state.get(secret_number, False)
+        
+        if is_live:
+            if not prev_live:
+                send_telegram_message(secret_number)
+            state[secret_number] = True
         else:
-            print("⚪ Profile is offline.")
+            state[secret_number] = False
             
     except Exception as e:
-        print(f"❌ Error checking profile: {e}")
+        print(f"Error: {e}")
 
 driver.quit()
+save_state(state)
