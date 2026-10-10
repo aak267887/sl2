@@ -86,3 +86,4 @@ for url, secret_number in urls_map.items():
 
 driver.quit()
 save_state(state)
+print(f"Page Title for {secret_number}: {driver.title}")
